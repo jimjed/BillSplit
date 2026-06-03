@@ -2,6 +2,8 @@
 
 A standalone, client-side web application designed to make receipt splitting quick, itemized, and friction-free. Perfect as a companion tool for **Splitwise**.
 
+🚀 **Live Link:** [https://jimjed.github.io/BillSplit/](https://jimjed.github.io/BillSplit/)
+
 ## 🚀 The Splitwise Problem This Solves
 
 While **Splitwise** is excellent at tracking who owes whom and settling balances, it has significant pain points when dealing with single bills containing itemized details:
@@ -44,7 +46,7 @@ While **Splitwise** is excellent at tracking who owes whom and settling balances
 
 ## 📦 Getting Started
 
-Since this is a standalone single-page application (SPA), there is no installation required:
+You can run the application in two ways:
 
-1. Clone or download this repository.
-2. Double-click [BillSplit.html](file:///Users/jimj/Documents/Projects/BillSplit/BillSplit.html) to open it in your browser.
+1. **Web Version:** Access the live page directly at [https://jimjed.github.io/BillSplit/](https://jimjed.github.io/BillSplit/)
+2. **Local Version:** Clone or download this repository, and open [index.html](index.html) in any web browser.
