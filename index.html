@@ -38,6 +38,8 @@
             --row-hover: rgba(79, 70, 229, 0.04);
             --matrix-cell-hover: #f8fafc;
             --matrix-input-hover: #f1f5f9;
+            --matrix-sticky-bg: #ffffff;
+            --matrix-sticky-header-bg: #f8fafc;
         }
 
         [data-theme="dark"] {
@@ -62,6 +64,8 @@
             --row-hover: rgba(99, 102, 241, 0.08);
             --matrix-cell-hover: rgba(255, 255, 255, 0.02);
             --matrix-input-hover: rgba(255, 255, 255, 0.04);
+            --matrix-sticky-bg: #0f172a;
+            --matrix-sticky-header-bg: #1e293b;
         }
 
         * {
@@ -72,11 +76,32 @@
             user-select: none;
         }
 
+        /* Allow native text selection and input editing on mobile devices */
+        input, select, textarea, [contenteditable="true"] {
+            -webkit-user-select: text;
+            user-select: text;
+        }
+
+        /* Enable copy/paste on breakdown texts, history details, and summaries */
+        .summary-container,
+        .breakdown-card,
+        .breakdown-table,
+        .detailed-breakdown,
+        .person-breakdown,
+        .history-item,
+        #historyDetailContainer,
+        #individualBreakdowns,
+        pre, code {
+            -webkit-user-select: text;
+            user-select: text;
+        }
+
         html, body {
             width: 100%;
-            height: 100%;
-            position: fixed;
-            overflow: hidden;
+            min-height: 100%;
+            margin: 0;
+            padding: 0;
+            overscroll-behavior-y: contain; /* Prevents scroll bounce chaining while allowing natural scrolling */
         }
 
         body {
@@ -86,20 +111,21 @@
             -webkit-font-smoothing: antialiased;
             -webkit-touch-callout: none;
             transition: background 0.3s ease, color 0.3s ease;
+            overflow-x: hidden;
         }
 
         #app {
             width: 100%;
-            height: 100%;
-            overflow-y: auto;
-            -webkit-overflow-scrolling: touch;
-            padding-bottom: 40px;
+            padding-bottom: calc(40px + env(safe-area-inset-bottom));
+            padding-top: env(safe-area-inset-top);
         }
 
         .container {
             max-width: 900px;
             margin: 0 auto;
             padding: 20px;
+            padding-left: calc(20px + env(safe-area-inset-left));
+            padding-right: calc(20px + env(safe-area-inset-right));
         }
 
         header {
@@ -658,6 +684,17 @@
             }
         }
 
+        @keyframes slideUpToast {
+            from {
+                transform: translateY(100px);
+                opacity: 0;
+            }
+            to {
+                transform: translateY(0);
+                opacity: 1;
+            }
+        }
+
         /* Spreadsheet Matrix Layout */
         .matrix-container {
             width: 100%;
@@ -672,9 +709,45 @@
 
         .matrix-table {
             width: 100%;
-            border-collapse: collapse;
+            border-collapse: separate;
+            border-spacing: 0;
             font-size: 0.95rem;
             min-width: 650px;
+        }
+
+        /* Sticky Columns for mobile view context preservation */
+        .matrix-table th:nth-child(1),
+        .matrix-table td:nth-child(1) {
+            position: -webkit-sticky;
+            position: sticky;
+            left: 0;
+            z-index: 10;
+            background: var(--matrix-sticky-bg);
+            min-width: 150px;
+            max-width: 150px;
+        }
+
+        .matrix-table th:nth-child(2),
+        .matrix-table td:nth-child(2) {
+            position: -webkit-sticky;
+            position: sticky;
+            left: 150px;
+            z-index: 10;
+            background: var(--matrix-sticky-bg);
+            min-width: 95px;
+            max-width: 95px;
+            border-right: 2px solid var(--input-border);
+        }
+
+        .matrix-table th:nth-child(1),
+        .matrix-table th:nth-child(2) {
+            background: var(--matrix-sticky-header-bg);
+            z-index: 11;
+        }
+
+        .matrix-table tbody tr:hover td:nth-child(1),
+        .matrix-table tbody tr:hover td:nth-child(2) {
+            background: var(--matrix-cell-hover);
         }
 
         .matrix-table th {
@@ -955,6 +1028,14 @@
 
             .card {
                 padding: 20px;
+            }
+
+            .toast {
+                left: 20px;
+                right: 20px;
+                bottom: calc(20px + env(safe-area-inset-bottom));
+                text-align: center;
+                animation: slideUpToast 0.3s ease-out;
             }
         }
 
