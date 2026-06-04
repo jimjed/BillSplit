@@ -24,7 +24,7 @@ While **Splitwise** is excellent at tracking who owes whom and settling balances
 
 ## ✨ Features
 
-- 📸 **Receipt OCR Scanner**: Take a picture of your receipt to automatically extract item names and prices locally using `Tesseract.js` (no images are uploaded to any server).
+- 📸 **Receipt OCR Scanner**: Take a picture of your receipt to automatically extract item names and prices locally using `Tesseract.js` (no images are uploaded to any server). Features a **Preprocessing Control Panel** (Contrast adjustment slider and text-dilation toggle) with real-time visual canvas previews, and an **Interactive Verification List** to modify, add, or delete items inline before pushing them to the ledger.
 - ✏️ **Manual Matrix Grid**: Add items and assign portion weights (Count mode) or percentages (% mode) to members of your group.
 - 👥 **Group Presets**: Create and save groups of friends (e.g., roommates, weekend trip) to instantly load member details without re-entering names.
 - 📜 **Calculations History Ledger**: Access a persistent record of all past calculations, complete with detailed sub-pages, shareable summaries, CSVs, and deletion options.

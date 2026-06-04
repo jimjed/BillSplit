@@ -615,6 +615,43 @@
             color: var(--text-primary);
         }
 
+        .ocr-review-layout {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+
+        @media (min-width: 768px) {
+            .ocr-review-layout {
+                grid-template-columns: 1fr 1fr;
+            }
+        }
+
+        .ocr-image-panel {
+            background: var(--input-bg);
+            border: 1px solid var(--input-border);
+            border-radius: 12px;
+            padding: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            max-height: 450px;
+            overflow: auto;
+        }
+
+        .ocr-image-panel img {
+            max-width: 100%;
+            max-height: 400px;
+            object-fit: contain;
+            border-radius: 8px;
+        }
+
+        .ocr-results-panel {
+            display: flex;
+            flex-direction: column;
+        }
+
         .spinner {
             display: inline-block;
             width: 16px;
@@ -1331,6 +1368,8 @@
             groups: [],
             results: null,
             history: [],
+            extractedItems: [],
+            ocrOriginalImg: null,
 
             init() {
                 this.loadTheme();
@@ -1405,72 +1444,371 @@
                 }
             },
 
+            tesseractWorker: null,
+
+            async getTesseractWorker() {
+                if (!this.tesseractWorker) {
+                    const container = document.getElementById('ocrContainer');
+                    const statusText = container.querySelector('.ocr-loading span');
+                    if (statusText) statusText.textContent = 'Initializing OCR engine...';
+
+                    const worker = await Tesseract.createWorker('eng', 1, {
+                        logger: m => {
+                            const currentContainer = document.getElementById('ocrContainer');
+                            if (!currentContainer) return;
+                            const statusEl = currentContainer.querySelector('.ocr-loading span');
+                            if (statusEl) {
+                                if (m.status === 'recognizing text') {
+                                    statusEl.textContent = `Scanning... ${Math.round(m.progress * 100)}%`;
+                                } else if (m.status === 'loading language traineddata') {
+                                    statusEl.textContent = `Loading OCR files... ${Math.round(m.progress * 100)}%`;
+                                }
+                            }
+                        }
+                    });
+                    await worker.setParameters({
+                        tessedit_char_whitelist: '0123456789.abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ$%&*-+(),/ \n\r'
+                    });
+                    this.tesseractWorker = worker;
+                }
+                return this.tesseractWorker;
+            },
+
+            preprocessImage(dataUrl, contrastFactor = 1.7, useDilation = false) {
+                return new Promise((resolve) => {
+                    const img = new Image();
+                    img.onload = () => {
+                        const canvas = document.createElement('canvas');
+                        const ctx = canvas.getContext('2d');
+                        canvas.width = img.width;
+                        canvas.height = img.height;
+                        
+                        ctx.drawImage(img, 0, 0);
+                        
+                        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                        const data = imageData.data;
+                        const width = canvas.width;
+                        const height = canvas.height;
+                        
+                        for (let i = 0; i < data.length; i += 4) {
+                            const r = data[i];
+                            const g = data[i+1];
+                            const b = data[i+2];
+                            
+                            let gray = 0.299 * r + 0.587 * g + 0.114 * b;
+                            gray = (gray - 128) * contrastFactor + 128;
+                            gray = Math.max(0, Math.min(255, gray));
+                            
+                            data[i] = data[i+1] = data[i+2] = gray;
+                        }
+                        
+                        if (useDilation) {
+                            const src = new Uint8ClampedArray(data);
+                            for (let y = 0; y < height; y++) {
+                                for (let x = 0; x < width; x++) {
+                                    const idx = (y * width + x) * 4;
+                                    let minVal = 255;
+                                    for (let ky = -1; ky <= 1; ky++) {
+                                        const ny = y + ky;
+                                        if (ny < 0 || ny >= height) continue;
+                                        for (let kx = -1; kx <= 1; kx++) {
+                                            const nx = x + kx;
+                                            if (nx < 0 || nx >= width) continue;
+                                            const nIdx = (ny * width + nx) * 4;
+                                            const val = src[nIdx];
+                                            if (val < minVal) minVal = val;
+                                        }
+                                    }
+                                    data[idx] = data[idx+1] = data[idx+2] = minVal;
+                                }
+                            }
+                        }
+                        
+                        ctx.putImageData(imageData, 0, 0);
+                        resolve(canvas.toDataURL('image/jpeg', 0.9));
+                    };
+                    img.src = dataUrl;
+                });
+            },
+
+            uploadedImgSrc: null,
+
             async handleImageUpload(event) {
                 const file = event.target.files[0];
                 if (!file) return;
 
                 const reader = new FileReader();
-                reader.onload = async (e) => {
-                    const img = e.target.result;
-                    const container = document.getElementById('ocrContainer');
+                reader.onload = (e) => {
+                    this.uploadedImgSrc = e.target.result;
                     
-                    container.innerHTML = `<div class="ocr-preview"><img src="${img}" alt="Receipt"></div><div class="ocr-loading"><div class="spinner"></div><span>Scanning...</span></div>`;
-
-                    try {
-                        const { data: { text } } = await Tesseract.recognize(img, 'eng');
-                        this.parseReceipt(text, container);
-                    } catch (err) {
-                        container.innerHTML = `<div style="background: #fff3cd; border: 2px solid #ffc107; border-radius: 8px; padding: 16px;"><p style="font-weight: 600;">Scan failed</p><button class="button button-secondary" onclick="app.switchTab('manual')" style="width: 100%; margin-top: 12px;">Add Manually</button></div>`;
-                    }
+                    const container = document.getElementById('ocrContainer');
+                    container.innerHTML = `
+                        <div class="ocr-editor-panel" style="display: flex; flex-direction: column; gap: 16px; margin-bottom: 20px;">
+                            <div style="background: var(--input-bg); border: 1px solid var(--input-border); border-radius: 12px; padding: 16px;">
+                                <div style="font-weight: 600; margin-bottom: 12px; display: flex; align-items: center; justify-content: space-between;">
+                                    <span>🛠️ Image Preprocessing Settings</span>
+                                    <button class="button button-secondary button-small" onclick="app.resetPreprocessing()" style="padding: 4px 8px; font-size: 0.8rem;">Reset</button>
+                                </div>
+                                <div class="input-group" style="margin-bottom: 12px;">
+                                    <label style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+                                        <span>Contrast:</span>
+                                        <span id="contrastValLabel">1.7x</span>
+                                    </label>
+                                    <input type="range" id="ocrContrastSlider" min="1.0" max="3.0" step="0.1" value="1.7" style="width: 100%;" oninput="app.updateOcrPreprocessingPreview()">
+                                </div>
+                                <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px;">
+                                    <label for="ocrDilationCheckbox" style="margin: 0; cursor: pointer; font-weight: 500;">Thicken Thin Text (Dilation)</label>
+                                    <input type="checkbox" id="ocrDilationCheckbox" onchange="app.updateOcrPreprocessingPreview()" style="width: 20px; height: 20px; cursor: pointer;">
+                                </div>
+                                <button class="button" onclick="app.startOcrScanning()" style="width: 100%;">📸 Scan Receipt Now</button>
+                            </div>
+                            
+                            <div class="ocr-preview" style="background: var(--input-bg); border: 2px dashed var(--accent-primary); border-radius: 12px; padding: 12px; text-align: center;">
+                                <p style="color: var(--text-secondary); font-size: 0.9rem; margin-bottom: 8px; font-weight: 500;">Preprocessing Preview:</p>
+                                <canvas id="ocrPreviewCanvas" style="max-width: 100%; max-height: 400px; border-radius: 8px; object-fit: contain; box-shadow: var(--shadow);"></canvas>
+                            </div>
+                        </div>
+                    `;
+                    
+                    const scannerHint = document.getElementById('scannerHint');
+                    if (scannerHint) scannerHint.style.display = 'none';
+                    
+                    this.updateOcrPreprocessingPreview();
                 };
                 reader.readAsDataURL(file);
             },
 
-            parseReceipt(text, container) {
+            async updateOcrPreprocessingPreview() {
+                if (!this.uploadedImgSrc) return;
+                
+                const contrastSlider = document.getElementById('ocrContrastSlider');
+                const dilationCheckbox = document.getElementById('ocrDilationCheckbox');
+                const label = document.getElementById('contrastValLabel');
+                const canvas = document.getElementById('ocrPreviewCanvas');
+                
+                if (!contrastSlider || !dilationCheckbox || !canvas) return;
+                
+                const contrast = parseFloat(contrastSlider.value);
+                const dilate = dilationCheckbox.checked;
+                
+                label.textContent = contrast.toFixed(1) + 'x';
+                
+                const img = new Image();
+                img.onload = () => {
+                    const ctx = canvas.getContext('2d');
+                    canvas.width = img.width;
+                    canvas.height = img.height;
+                    ctx.drawImage(img, 0, 0);
+                    
+                    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                    const data = imageData.data;
+                    const width = canvas.width;
+                    const height = canvas.height;
+                    
+                    for (let i = 0; i < data.length; i += 4) {
+                        const r = data[i];
+                        const g = data[i+1];
+                        const b = data[i+2];
+                        
+                        let gray = 0.299 * r + 0.587 * g + 0.114 * b;
+                        gray = (gray - 128) * contrast + 128;
+                        gray = Math.max(0, Math.min(255, gray));
+                        
+                        data[i] = data[i+1] = data[i+2] = gray;
+                    }
+                    
+                    if (dilate) {
+                        const src = new Uint8ClampedArray(data);
+                        for (let y = 0; y < height; y++) {
+                            for (let x = 0; x < width; x++) {
+                                const idx = (y * width + x) * 4;
+                                let minVal = 255;
+                                for (let ky = -1; ky <= 1; ky++) {
+                                    const ny = y + ky;
+                                    if (ny < 0 || ny >= height) continue;
+                                    for (let kx = -1; kx <= 1; kx++) {
+                                        const nx = x + kx;
+                                        if (nx < 0 || nx >= width) continue;
+                                        const nIdx = (ny * width + nx) * 4;
+                                        const val = src[nIdx];
+                                        if (val < minVal) minVal = val;
+                                    }
+                                }
+                                data[idx] = data[idx+1] = data[idx+2] = minVal;
+                            }
+                        }
+                    }
+                    
+                    ctx.putImageData(imageData, 0, 0);
+                };
+                img.src = this.uploadedImgSrc;
+            },
+
+            resetPreprocessing() {
+                const contrastSlider = document.getElementById('ocrContrastSlider');
+                const dilationCheckbox = document.getElementById('ocrDilationCheckbox');
+                if (contrastSlider) contrastSlider.value = 1.7;
+                if (dilationCheckbox) dilationCheckbox.checked = false;
+                this.updateOcrPreprocessingPreview();
+            },
+
+            async startOcrScanning() {
+                const canvas = document.getElementById('ocrPreviewCanvas');
+                if (!canvas) return;
+                
+                const container = document.getElementById('ocrContainer');
+                const processedImgDataUrl = canvas.toDataURL('image/jpeg', 0.9);
+                const originalImg = this.uploadedImgSrc;
+                
+                container.innerHTML = `
+                    <div class="ocr-preview">
+                        <img src="${processedImgDataUrl}" alt="Preprocessed Receipt">
+                    </div>
+                    <div class="ocr-loading">
+                        <div class="spinner"></div>
+                        <span>Initializing...</span>
+                    </div>
+                `;
+                
+                try {
+                    const worker = await this.getTesseractWorker();
+                    const statusText = container.querySelector('.ocr-loading span');
+                    
+                    if (statusText) statusText.textContent = 'Scanning...';
+                    const { data: { text } } = await worker.recognize(processedImgDataUrl);
+                    this.parseReceipt(text, container, originalImg);
+                } catch (err) {
+                    console.error(err);
+                    container.innerHTML = `
+                        <div style="background: #fff3cd; border: 2px solid #ffc107; border-radius: 8px; padding: 16px;">
+                            <p style="font-weight: 600;">Scan failed</p>
+                            <button class="button button-secondary" onclick="app.switchTab('manual')" style="width: 100%; margin-top: 12px;">Add Manually</button>
+                        </div>
+                    `;
+                }
+            },
+
+            parseReceipt(text, container, originalImg) {
                 const lines = text.split('\n');
-                const items = [];
+                this.extractedItems = [];
+                this.ocrOriginalImg = originalImg;
+                
+                const ignoreKeywordsRegex = /\b(total|subtotal|sub-total|tax|gst|vat|hst|sales tax|cash|change|visa|mastercard|amex|card|tendered|due|amount|payment|items|duplicate|merchant|thank you|welcome|phone|tel|fax|receipt|invoice|food|tip|tender)\b/i;
 
                 for (let line of lines) {
                     line = line.trim();
                     if (!line) continue;
 
-                    const priceMatch = line.match(/(\d+\.?\d*)\s*$/);
+                    if (ignoreKeywordsRegex.test(line)) {
+                        continue;
+                    }
+
+                    let cleanLine = line.replace(/\s*[\*a-zA-Z]$/, '').trim();
+
+                    // 1. Try to find a decimal price anywhere in the line first
+                    let priceMatch = cleanLine.match(/[\$€£]?\s*(\d+[\.,]\d{2})/);
+                    let name = "";
+                    let price = 0;
+
                     if (priceMatch) {
-                        const price = parseFloat(priceMatch[1]);
-                        if (price > 0 && price < 1000) {
-                            const name = line.replace(priceMatch[0], '').trim();
-                            if (name && name.length > 1) {
-                                items.push({ name, price });
-                            }
+                        const priceStr = priceMatch[1].replace(',', '.');
+                        price = parseFloat(priceStr);
+                        name = cleanLine.substring(0, cleanLine.indexOf(priceMatch[0])).trim();
+                    } else {
+                        // 2. Fallback to whole numbers at the end of the line
+                        const fallbackMatch = cleanLine.match(/[\$€£]?\s*(\d+)$/);
+                        if (fallbackMatch) {
+                            price = parseFloat(fallbackMatch[1]);
+                            name = cleanLine.substring(0, cleanLine.lastIndexOf(fallbackMatch[0])).trim();
+                        }
+                    }
+
+                    if (price > 0 && price < 10000 && name) {
+                        // Clean leading punctuation symbols (e.g. "= Sev's Drugs" -> "Sev's Drugs")
+                        name = name.replace(/^[^a-zA-Z0-9👤👥]+/, '').trim();
+                        
+                        if (name && name.length > 1) {
+                            this.extractedItems.push({ name, price });
                         }
                     }
                 }
 
-                if (items.length === 0) {
+                if (this.extractedItems.length === 0) {
                     container.innerHTML = `<div style="background: #fff3cd; border: 2px solid #ffc107; border-radius: 8px; padding: 16px;"><p style="font-weight: 600;">No items found</p><button class="button button-secondary" onclick="app.switchTab('manual')" style="width: 100%; margin-top: 12px;">Add Manually</button></div>`;
                     return;
                 }
 
-                let html = `<div style="margin-bottom: 20px;"><p style="color: #666; font-weight: 500; margin-bottom: 12px;">Found ${items.length} items:</p><div class="extracted-items">`;
-                items.forEach((item, idx) => {
-                    html += `<div class="extracted-item"><input type="text" value="${item.name}" id="extractName${idx}"><input type="number" value="${item.price.toFixed(2)}" id="extractPrice${idx}" class="extracted-item-price" step="0.01" min="0"></div>`;
+                this.renderExtractedItems();
+            },
+
+            renderExtractedItems() {
+                const container = document.getElementById('ocrContainer');
+                if (!container) return;
+
+                let itemsHtml = '';
+                this.extractedItems.forEach((item, idx) => {
+                    itemsHtml += `
+                        <div class="extracted-item" style="align-items: center; display: flex; gap: 8px; margin-bottom: 8px;">
+                            <input type="text" value="${item.name}" oninput="app.updateExtractedItemName(${idx}, this.value)" placeholder="Item Name" style="flex: 1;">
+                            <input type="number" value="${item.price.toFixed(2)}" class="extracted-item-price" step="0.01" min="0" oninput="app.updateExtractedItemPrice(${idx}, this.value)" placeholder="0.00" style="width: 100px;">
+                            <button class="matrix-delete-btn" onclick="app.deleteExtractedItem(${idx})" title="Delete Item" style="padding: 4px; font-size: 1.1rem; display: flex; align-items: center; justify-content: center; height: 38px; width: 38px;">🗑️</button>
+                        </div>
+                    `;
                 });
-                html += `</div></div><button class="button" onclick="app.addExtractedItems(${items.length})" style="width: 100%; margin-bottom: 12px;">Add Items</button><button class="button button-secondary" onclick="app.clearOCR()" style="width: 100%;">Cancel</button>`;
+
+                let html = `
+                    <div class="ocr-review-layout">
+                        <div class="ocr-image-panel">
+                            <img src="${this.ocrOriginalImg}" alt="Receipt Source">
+                        </div>
+                        <div class="ocr-results-panel">
+                            <p style="color: var(--text-secondary); font-weight: 500; margin-bottom: 12px;">Verify & Edit Extracted Items (${this.extractedItems.length}):</p>
+                            <div class="extracted-items" style="max-height: 250px; overflow-y: auto; padding: 12px; border: 1px solid var(--input-border); border-radius: 8px; background: var(--input-bg); margin-bottom: 12px;">
+                                ${itemsHtml || '<p style="color: var(--text-muted); text-align: center; padding: 20px 0; font-size: 0.95rem;">No items in the list. Click "+ Add Item" below.</p>'}
+                            </div>
+                            <button class="button button-secondary button-small" onclick="app.addExtractedItem()" style="margin-bottom: 12px; width: 100%; font-size: 0.9rem;">➕ Add Item</button>
+                            <button class="button" onclick="app.addExtractedItems()" style="width: 100%; margin-bottom: 8px;">Add Items to Bill</button>
+                            <button class="button button-secondary" onclick="app.clearOCR()" style="width: 100%;">Cancel</button>
+                        </div>
+                    </div>
+                `;
 
                 container.innerHTML = html;
             },
 
-            addExtractedItems(count) {
-                for (let i = 0; i < count; i++) {
-                    const name = document.getElementById(`extractName${i}`).value;
-                    const price = parseFloat(document.getElementById(`extractPrice${i}`).value);
-                    if (name && price > 0) {
+            updateExtractedItemName(idx, val) {
+                if (this.extractedItems[idx]) {
+                    this.extractedItems[idx].name = val;
+                }
+            },
+
+            updateExtractedItemPrice(idx, val) {
+                if (this.extractedItems[idx]) {
+                    this.extractedItems[idx].price = parseFloat(val) || 0;
+                }
+            },
+
+            deleteExtractedItem(idx) {
+                this.extractedItems.splice(idx, 1);
+                this.renderExtractedItems();
+            },
+
+            addExtractedItem() {
+                this.extractedItems.push({ name: '', price: 0.00 });
+                this.renderExtractedItems();
+            },
+
+            addExtractedItems() {
+                this.extractedItems.forEach((item, i) => {
+                    if (item.name && item.price > 0) {
                         const itemId = 'item_' + Date.now() + '_' + i;
-                        this.items.push({ id: itemId, name, price });
+                        this.items.push({ id: itemId, name: item.name, price: item.price });
                         this.portions[itemId] = {};
                         this.people.forEach(p => { this.portions[itemId][p] = 1; });
                     }
-                }
+                });
+                this.extractedItems = [];
+                this.ocrOriginalImg = null;
                 this.saveToStorage();
                 this.updateSubtotal();
                 this.renderItems();
@@ -1481,6 +1819,8 @@
             },
 
             clearOCR() {
+                this.extractedItems = [];
+                this.ocrOriginalImg = null;
                 document.getElementById('billImageInput').value = '';
                 document.getElementById('ocrContainer').innerHTML = '';
             },
